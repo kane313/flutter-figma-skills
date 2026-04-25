@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "flutter-figma-skills",
+  "description": "Skills for reproducing Flutter UI from Figma designs with high fidelity, via a 5-phase orchestrated pipeline.",
+  "owner": {
+    "name": "shenjinhua"
+  },
+  "plugins": [
+    {
+      "name": "flutter-figma-reproduce",
+      "description": "Reproduces a Flutter UI page from a Figma design via a 5-phase pipeline (align tokens / build skeleton / fill styles / add states & interaction / verify). Supports safe / fast / auto modes.",
+      "category": "development",
+      "source": "./plugins/flutter-figma-reproduce"
+    }
+  ]
+}

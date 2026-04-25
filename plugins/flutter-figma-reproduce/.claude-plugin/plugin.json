@@ -1,0 +1,16 @@
+{
+  "name": "flutter-figma-reproduce",
+  "description": "Standardizes Flutter UI reproduction from Figma designs. Provides a main orchestrator skill (5-phase workflow) and tool skills for token alignment, layout translation, asset handling, state scaffolding, and pixel-level visual verification.",
+  "version": "0.1.0",
+  "author": {
+    "name": "shenjinhua"
+  },
+  "license": "MIT",
+  "keywords": [
+    "flutter",
+    "figma",
+    "ui-reproduction",
+    "design-system",
+    "skills"
+  ]
+}

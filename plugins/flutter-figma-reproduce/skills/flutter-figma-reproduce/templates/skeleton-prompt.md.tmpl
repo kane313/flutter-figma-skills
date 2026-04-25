@@ -1,0 +1,35 @@
+# Skeleton Generation Prompt
+
+Use this as the instruction when writing `_skeleton.dart`:
+
+---
+
+Generate a Flutter widget tree for the page below. Follow ALL rules.
+
+**Figma translation** (from `figma-autolayout-to-flex`):
+
+{{AUTOLAYOUT_OUTPUT}}
+
+**Align table** (only source for any value):
+
+{{ALIGN_TABLE_SUMMARY}}
+
+**Status bar style** (computed from Figma top-44px luminance):
+
+{{STATUS_BAR_STYLE}}
+
+**Rules** (see `references/01-skeleton.md` for full list):
+
+1. Widget tree structure only — leaf nodes are placeholders:
+   - Text → `Text('<placeholder>')`
+   - Image → `ColoredBox(color: Color(0xFFE5E5E5))`
+   - Icon → `Icon(Icons.circle, color: Color(0xFFE5E5E5))`
+   - Button → `Container(child: Text('<label>'))` — no styling, just structure
+2. No styles (no colors beyond placeholder grey, no padding values beyond those required for layout, no fonts)
+3. Stack nesting ≤ 2; never wrap ListView in SingleChildScrollView
+4. **Immersive Scaffold by default**: `extendBodyBehindAppBar: true`, transparent AppBar with `systemOverlayStyle: {{STATUS_BAR_STYLE}}`. Wrap body in `SafeArea(top: false, bottom: true)` (NOT top: true — sinks status bar content). For pages without AppBar, wrap in `AnnotatedRegion<SystemUiOverlayStyle>`.
+5. Flexible/Expanded only inside Row/Column/Flex
+6. If any node has Figma constraints annotation, wrap ancestor in `LayoutBuilder`
+7. Override the immersive default ONLY when Figma clearly shows a non-immersive opaque AppBar — see `references/01-skeleton.md` § "Override path"
+
+Output: the Dart widget tree as a single `build` method body, no imports, no class wrapper.

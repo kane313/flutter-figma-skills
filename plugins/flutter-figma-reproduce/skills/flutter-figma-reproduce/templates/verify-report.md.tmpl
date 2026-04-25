@@ -1,0 +1,46 @@
+# Verify Report
+
+**Page:** {{TARGET}}
+**Figma:** {{FIGMA_URL}}
+**Generated:** {{TIMESTAMP}}
+
+## Verdict: {{VERDICT}}
+
+## Layered Scorecard
+
+### Token Layer
+- **Status:** {{TOKEN_STATUS}}
+- **Threshold:** 100% values sourced from align-table
+- **Details:** {{TOKEN_DETAILS}}
+
+### Structure Layer
+- **Status:** {{STRUCTURE_STATUS}}
+- **Tool:** flutter-widget-tree-review
+- **Details:** {{STRUCTURE_DETAILS}}
+
+### Visual Layer
+- **Status:** {{VISUAL_STATUS}}
+- **Tool:** figma-flutter-pixel-diff (Patrol-driven)
+- **Threshold:** diff rate < 5%
+- **Actual:** {{VISUAL_DIFF_RATE}}%
+- **Heatmap:** {{HEATMAP_PATH}}
+- **Top-3 regions:** {{VISUAL_TOP_REGIONS}}
+
+### Interaction Layer
+- **Status:** {{INTERACTION_STATUS}}
+- **Checklist results:**
+  - [{{STATE_LOADING}}] loading state renders
+  - [{{STATE_EMPTY}}] empty state renders
+  - [{{STATE_ERROR}}] error state renders with retry
+  - [{{STATE_SUCCESS}}] success state renders
+  - [{{BUTTON_SPLASH}}] buttons show splash feedback
+  - [{{LIST_REFRESH}}] list supports pull-to-refresh
+  - [{{ANIMATIONS}}] prototype animations play as expected
+
+## If failed: likely source phase
+
+{{FAILURE_MAPPING}}
+
+## Next action
+
+{{NEXT_ACTION}}
