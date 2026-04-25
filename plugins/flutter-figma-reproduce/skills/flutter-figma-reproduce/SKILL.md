@@ -106,7 +106,8 @@ Templates for files owned by the main skill (not produced by sub-skills): `templ
 
 - `references/senior-knowledge.md` — what a senior dev looks at when opening Figma; consult in Phase 0/1
 - `references/failure-modes.md` — AI's common mistakes in Flutter code gen; consult at every phase start
-- `references/fastlane.md` — fast-mode rules (exact behavior differences from safe)
+- `references/fastlane.md` — fast-mode and auto-mode rules (exact behavior differences vs safe)
+- `references/patterns/` — canonical compound layouts (e.g. banner + sticky tabs + swipeable content). Consult in Phase 1 BEFORE designing layout from scratch — see `01-skeleton.md` § "Common patterns library" for triggers.
 - `tools/scorecard-checker.md` — Token layer & structure layer automatic check algorithm (used by every code-generating phase)
 
 ## Constraints

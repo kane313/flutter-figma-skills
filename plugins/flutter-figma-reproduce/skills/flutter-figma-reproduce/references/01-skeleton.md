@@ -130,6 +130,16 @@ Emit a Phase 1 checkpoint note: "Detected non-immersive AppBar in Figma — usin
 - MaterialApp NEVER nested inside a page widget — page widget should be just Scaffold or custom widget
 - No `MediaQuery.of(context).size` as primary layout mechanism — prefer `LayoutBuilder` or `FractionallySizedBox`
 
+## Common patterns library (consult when applicable)
+
+Before falling back to a raw `Stack + Positioned` layout, check whether the Figma design + user's interaction requirements match a known compound pattern. Each pattern doc in `references/patterns/` lists detection triggers, anti-patterns, and a canonical structure with explanations of WHY each part exists (so the AI can adapt, not blindly copy).
+
+| Pattern | When to use | Doc |
+|---|---|---|
+| Banner + sticky tabs + swipeable content | Top hero + horizontal tab strip + tab-switchable grid/list, AND user mentions "切 tab" / "上滑吸顶" / "swipe between tabs" / etc. | `references/patterns/nested-scroll-with-sticky-tabs.md` |
+
+When a pattern matches, prefer it over a from-scratch layout — the patterns encode failure-mode-tested structures (e.g. `SliverOverlapAbsorber/Injector` pairing, `MediaQuery.padding.top` inset for sticky strips, `PageStorageKey` for per-tab scroll preservation) that take real-device debugging to discover otherwise.
+
 ## Stopping conditions
 
 - `figma-autolayout-to-flex` returns empty / error → abort, report "layout translation failed — inspect Figma node for unusual structure"
