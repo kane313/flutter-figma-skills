@@ -22,13 +22,16 @@ The dilemma:
 - **No inset**: device status bar overlays the strip's pills in pinned state. Pills unreadable.
 - **Static `SliverPersistentHeader` with min == max**: cannot grow when pinned (extents are immutable per build).
 
-The correct fix is a **two-step alignment toggle**:
+The correct fix is a **dynamic slot height** driven by an `isPinned` flag:
 
-1. The strip's slot is permanently `pillH + statusBarInset` tall — enough room for pill + inset.
-2. When NOT pinned: pill aligned to TOP of slot → 0 gap above pill, the inset's space is BELOW pill (visually inside the page bg between strip and grid — much less salient than a gap above).
-3. When pinned: pill aligned to BOTTOM of slot → inset's space is ABOVE pill, hidden under the device status bar. Pill fully visible below status bar.
+1. **`isPinned == false`** (banner above visible): slot height = `pillH` (just the pill, no inset). Banner.bottom → pill → grid; the only space between pill and grid is the grid's own top padding (typically 12-16px from the design — exactly what the designer drew). Zero waste.
+2. **`isPinned == true`** (banner scrolled away): slot grows to `pillH + statusBarInset`. Pill aligned to BOTTOM, inset's space sits ABOVE the pill — hidden under the device status-bar icons. Pill fully readable.
 
-To trigger the alignment toggle, you need to KNOW when the strip is pinned. **Do NOT use `SliverPersistentHeaderDelegate.overlapsContent` for this** — inside `NestedScrollView` it stays `false` even when the strip is clearly pinned (the inner scroll's content "scrolls under" the strip via `SliverOverlapAbsorber/Injector` rather than via the strip's overlapsContent). Use this instead:
+This requires the slot height to actually CHANGE between expanded and pinned. A `SliverPersistentHeader` with fixed `min == max` extents cannot do this; the workaround is to wrap the header in a `ValueListenableBuilder<bool>` that **constructs a new delegate instance with a different height** when pinned state flips. Flutter handles the layout transition smoothly because the change happens exactly at the moment the strip pins (when scroll just crosses bannerHeight) — visually imperceptible.
+
+> ⚠️ A common WRONG approach is to keep `min == max == pillH + statusBarInset` always and just toggle pill alignment between top (expanded) and bottom (pinned). Looks correct in pinned state, but in expanded state leaves `statusBarInset` (~28px) of empty pink wash BELOW the pill, BEFORE the grid's own padding kicks in — the grid appears pushed down by ~42px instead of the designed ~14px. Designer-eyes notice this immediately.
+
+To trigger the toggle, you need to KNOW when the strip is pinned. **Do NOT use `SliverPersistentHeaderDelegate.overlapsContent` for this** — inside `NestedScrollView` it stays `false` even when the strip is clearly pinned (the inner scroll's content "scrolls under" the strip via `SliverOverlapAbsorber/Injector` rather than via the strip's overlapsContent). Use this instead:
 
 ```dart
 class _ScrollShellState extends State<_ScrollShell> {
@@ -68,24 +71,46 @@ class _ScrollShellState extends State<_ScrollShell> {
 }
 ```
 
-Inside the delegate's `build`:
+The delegate uses `isPinned` to compute slot height AND top padding:
+
 ```dart
-@override
-Widget build(BuildContext ctx, double shrinkOffset, bool overlapsContent) {
-  return ColoredBox(
-    color: pageBg,
-    child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 15),
-      child: Align(
-        alignment: isPinned ? Alignment.bottomCenter : Alignment.topCenter,
-        child: SizedBox(height: pillH, child: stripWidget),
+class _StripDelegate extends SliverPersistentHeaderDelegate {
+  _StripDelegate({
+    required this.statusBarInset,
+    required this.isPinned,
+    ...
+  });
+
+  final double statusBarInset;
+  final bool isPinned;
+  static const double _pillH = 30;
+
+  double get _slotH => _pillH + (isPinned ? statusBarInset : 0);
+
+  @override double get minExtent => _slotH;
+  @override double get maxExtent => _slotH;
+
+  @override
+  Widget build(BuildContext ctx, double shrinkOffset, bool overlapsContent) {
+    return ColoredBox(
+      color: pageBg,
+      child: Padding(
+        padding: EdgeInsets.only(
+          top: isPinned ? statusBarInset : 0,
+          left: 15, right: 15,
+        ),
+        child: SizedBox(height: _pillH, child: stripWidget),
       ),
-    ),
-  );
+    );
+  }
+
+  @override
+  bool shouldRebuild(covariant _StripDelegate old) =>
+      old.statusBarInset != statusBarInset || old.isPinned != isPinned;
 }
 ```
 
-Don't forget to override `shouldRebuild` to compare the `isPinned` flag — otherwise the toggle won't trigger a rebuild.
+Don't forget the `shouldRebuild` override to include `isPinned` — otherwise the slot height & padding won't update when the flag flips.
 
 ## Anti-patterns to AVOID (will compile but break behavior)
 
@@ -96,7 +121,8 @@ Don't forget to override `shouldRebuild` to compare the `isPinned` flag — othe
 - ✗ `SliverAppBar(pinned: true)` without `SliverOverlapAbsorber` + matching `SliverOverlapInjector` in the body → scroll position desyncs between outer and inner, content jumps
 - ✗ Forgetting `MediaQuery.padding.top` in the pinned tab strip → tabs get covered by the device status bar after collapse
 - ✗ Each tab content as a plain `GridView` (no `CustomScrollView` wrapping) → `SliverOverlapInjector` can't be added, scroll syncing breaks
-- ✗ Adding a static `Padding(top: MediaQuery.padding.top)` ABOVE the pinned strip's pill → 28px visible gap between banner.bottom and pill, strip looks like it's floating not pinned. **Fix**: dynamic alignment via `NotificationListener + ValueNotifier` driving `Alignment.topCenter` (expanded) vs `Alignment.bottomCenter` (pinned). See § "The status-bar-inset dilemma".
+- ✗ Adding a static `Padding(top: MediaQuery.padding.top)` ABOVE the pinned strip's pill → 28px visible gap between banner.bottom and pill, strip looks like it's floating not pinned.
+- ✗ Keeping the strip slot at fixed `pillH + statusBarInset` always and just toggling pill alignment between top (expanded) and bottom (pinned) → fixes the gap above pill, but leaves a 28px empty pink wash BELOW pill in expanded state, pushing the grid down by ~42px instead of the designed ~14px. Designer notices immediately. **Fix**: also make the slot height dynamic — `pillH` when expanded, `pillH + statusBarInset` when pinned. See § "The status-bar-inset dilemma".
 - ✗ Relying on `SliverPersistentHeaderDelegate.overlapsContent` to detect the pinned state → unreliable inside `NestedScrollView`, often returns `false` even when the strip is visibly pinned. Use a `NotificationListener<ScrollNotification>` filtering on `n.depth == 0` to detect outer-scroll position passing the banner height instead.
 - ✗ Using `SliverAppBar(pinned: true, flexibleSpace: banner, bottom: stripPreferredSize)` as the header sliver. Three cascading failures: (a) `expandedHeight=bannerH` silently crops the banner because `expandedHeight` includes `bottom.height + toolbarHeight`; (b) the "fix" `expandedHeight = bannerH + stripH + statusBarInset` correctly preserves banner height BUT pushes the entire layout down ~58px, costing the user one full row of below-fold content (the design intent is for the strip to sit AT or slightly OVERLAP the banner's bottom edge, not strictly below it); (c) `bottom` renders strictly below the banner — you can't reproduce a Figma design where the strip Y overlaps the banner's max-Y by 1-3px. **Use `SliverToBoxAdapter(banner) + SliverPersistentHeader(pinned, delegate=strip)` as separate header slivers instead** — see the "Why this structure" subsection below.
 
