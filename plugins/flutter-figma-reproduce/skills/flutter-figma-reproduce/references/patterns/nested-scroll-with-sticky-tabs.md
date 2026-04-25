@@ -22,6 +22,7 @@ Without (4) — when the user only says "static layout" — use the simpler `Sta
 - ✗ `SliverAppBar(pinned: true)` without `SliverOverlapAbsorber` + matching `SliverOverlapInjector` in the body → scroll position desyncs between outer and inner, content jumps
 - ✗ Forgetting `MediaQuery.padding.top` in the pinned tab strip → tabs get covered by the device status bar after collapse
 - ✗ Each tab content as a plain `GridView` (no `CustomScrollView` wrapping) → `SliverOverlapInjector` can't be added, scroll syncing breaks
+- ✗ Setting `SliverAppBar.expandedHeight = bannerDesignHeight` and forgetting that it INCLUDES `toolbarHeight + bottom.height` → the `flexibleSpace` (your banner) gets only `expandedHeight - bottom.height` pixels, so the bottom of the banner (e.g. CTA button, decorations near the bottom) is silently cropped. Always compute `expandedHeight = bannerH + tabStripH + statusBarInset`. Pair it with `FlexibleSpaceBar(background: ..., alignment: Alignment.topCenter)` so the banner anchors to the top as the AppBar collapses.
 
 ## Canonical structure
 
@@ -56,7 +57,7 @@ NestedScrollView
 | `SliverOverlapAbsorber/Injector` pair | Tells the inner `CustomScrollView` "the outer header is N pixels tall right now"; without this, the inner scroll's first child renders at y=0 in the inner viewport, but the outer header overlaps it → visible content is hidden behind the pinned strip. |
 | `pinned: true` | The collapsed AppBar (toolbar + bottom) stays at the top of the viewport. |
 | `toolbarHeight: 0` | We don't want a Material toolbar bar; only the `bottom` (our tab strip) should remain visible after collapse. |
-| `expandedHeight` | Total AppBar height when fully expanded = banner + bottom. |
+| `expandedHeight` | **Total** AppBar height when fully expanded = `bannerDesignHeight + bottom.height + statusBarInset`. **Critical**: this is the AppBar's total, NOT the banner's standalone height. If you write `expandedHeight = 278` thinking that's the banner's 278, the banner actually gets `278 - bottom.height` pixels and its lower portion silently clips. |
 | `bottom: PreferredSize` | Anything in `bottom` is rendered at the BOTTOM of the AppBar regardless of scroll position. When AppBar is fully expanded, bottom sits right above the body. When fully collapsed, bottom sits at the top of the screen — that IS the 吸顶 effect. |
 | Status bar padding INSIDE `bottom` | The `bottom` widget rides at AppBar's bottom edge. When the AppBar is fully expanded, the bottom sits ~278px down from the screen top — well below the status bar. But when collapsed to just the bottom strip + statusBarHeight, the bottom edge hits y = `statusBar + tabHeight`. Without inset padding, the strip starts at y=0 (under the status bar). With `Padding(top: MediaQuery.padding.top)`, the strip starts below the status bar. |
 | `TabController` shared between strip + body | Strip click → `controller.animateTo(i)`; body swipe → `controller.index` updates; strip listens to controller and re-paints the selected pill. |
@@ -86,6 +87,11 @@ class _ScrollShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final statusBarInset = MediaQuery.of(context).padding.top;
+    // expandedHeight is the AppBar's TOTAL height (banner + strip + status
+    // bar). If you set this to just _bannerH you'll silently crop the
+    // bottom of your banner. See § "Anti-patterns to AVOID".
+    final expandedHeight = _bannerH + _stripH + statusBarInset;
     return NestedScrollView(
       headerSliverBuilder: (ctx, _) => [
         SliverOverlapAbsorber(
@@ -93,17 +99,22 @@ class _ScrollShell extends StatelessWidget {
           sliver: SliverAppBar(
             pinned: true,
             toolbarHeight: 0,
-            expandedHeight: _bannerH,
+            expandedHeight: expandedHeight,
             backgroundColor: pageBg,
             surfaceTintColor: Colors.transparent,
             elevation: 0,
             scrolledUnderElevation: 0,
             automaticallyImplyLeading: false,
             flexibleSpace: FlexibleSpaceBar(
-              background: Image.asset(bannerAsset, fit: BoxFit.cover),
+              background: Image.asset(
+                bannerAsset,
+                fit: BoxFit.cover,
+                // Anchor to top so banner bottom is the first to scroll off.
+                alignment: Alignment.topCenter,
+              ),
             ),
             bottom: PreferredSize(
-              preferredSize: Size.fromHeight(_stripH + MediaQuery.of(ctx).padding.top),
+              preferredSize: Size.fromHeight(_stripH + statusBarInset),
               child: ColoredBox(
                 color: pageBg,
                 child: Padding(
