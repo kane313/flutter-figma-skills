@@ -17,22 +17,31 @@ Without (4) — when the user only says "static layout" — use the simpler `Sta
 
 Use `SliverAppBar` (not raw `SliverToBoxAdapter` + `SliverPersistentHeader`). The built-in collapse animation is what gives the smoothest "feels native" sticky-tab transition; rolling your own with two-sliver header introduces height-jump artifacts at the pin moment.
 
+Three subtle requirements need to be satisfied simultaneously:
+
+A. **Banner immersive** — banner extends INTO the status bar area (designer's top-44px decorative gradient is meant to peek through the device status bar)
+B. **Zero gap above strip pill in expanded state** — pill flush against banner.bottom
+C. **Strip pill avoids status bar in pinned state** — `MediaQuery.padding.top` of clearance above pill so device icons don't overlap
+
+These three constraints CANNOT all be satisfied with static layout. The trick: keep the strip slot height static (`pillH + statusBarInset`) but **smoothly interpolate the pill's top padding from 0 → statusBarInset as scroll progresses from 0 → bannerHeight**. The "extra 28px" sits BELOW the pill in expanded state (least-salient location, between strip and grid) and ABOVE the pill in pinned state (covered by status bar icons).
+
 ```
 NestedScrollView
 ├─ headerSliverBuilder
-│  └─ SliverOverlapAbsorber                                 ← MANDATORY: handle = sliverOverlapAbsorberHandleFor(ctx)
+│  └─ SliverOverlapAbsorber                                  ← MANDATORY: handle = sliverOverlapAbsorberHandleFor(ctx)
 │     └─ SliverAppBar
-│        ├─ pinned: true                                     ← AppBar (with toolbar 0 + bottom strip) stays pinned at top after collapse
-│        ├─ primary: true                                    ← auto-applies status-bar inset above toolbar; works with extendBodyBehindAppBar
-│        ├─ toolbarHeight: 0                                 ← we don't want a Material toolbar — bottom IS our sticky strip
-│        ├─ expandedHeight: statusBarInset + bannerH + stripH   ← TOTAL AppBar height when fully expanded
+│        ├─ pinned: true                                      ← AppBar (with toolbar 0 + bottom strip) stays pinned at top after collapse
+│        ├─ primary: false                                    ← banner extends into status-bar area (immersive); we'll handle status-bar inset on the strip MANUALLY
+│        ├─ toolbarHeight: 0                                  ← we don't want a Material toolbar — bottom IS our sticky strip
+│        ├─ expandedHeight: bannerH + stripH + statusBarInset    ← TOTAL AppBar height when fully expanded; bottom.height already includes statusBarInset reservation
 │        ├─ flexibleSpace: FlexibleSpaceBar
-│        │   └─ background: Padding(top: statusBarInset, child: Image.asset(banner, fit: cover, alignment: topCenter))
-│        │      ↑ status-bar padding here so banner content doesn't render under status-bar icons
-│        ├─ bottom: PreferredSize
-│        │   └─ preferredSize.height = stripH                ← strip lives here (always at AppBar's bottom edge → naturally pinned)
-│        │   └─ child: ColoredBox(pageBg) → strip widget    ← NO status-bar padding needed here (handled by primary:true)
-│        └─ backgroundColor: pageBg, elevation: 0, surfaceTintColor: Colors.transparent
+│        │   ├─ collapseMode: CollapseMode.pin
+│        │   └─ background: Image.asset(banner, fit: cover, alignment: topCenter)   ← NO Padding wrapper — banner from y=0
+│        └─ bottom: PreferredSize
+│           ├─ preferredSize.height = stripH + statusBarInset                       ← slot reserves room for inset
+│           └─ child: ValueListenableBuilder<double>(_pinProgress, build: (_, p, _) =>
+│                ColoredBox(pageBg) → Padding(top: statusBarInset * p, ...) → strip ← interpolated padding 0..inset
+│              )
 └─ body: TabBarView
    └─ controller: <shared TabController>
       for each tab:
@@ -43,9 +52,28 @@ NestedScrollView
               └─ SliverGrid / SliverList (the actual content)
 ```
 
-### Why this structure works (collapse animation = no jumps)
+The parent (`StatefulWidget`) owns a `ValueNotifier<double> _pinProgress` and uses `NotificationListener<ScrollNotification>` to update it as the user scrolls:
 
-`SliverAppBar` natively interpolates between `expandedHeight` and `collapsedHeight` (= `toolbarHeight + bottom.height + statusBarInset` when `primary: true`) as the user scrolls. The strip in `bottom` rides at the bottom of the AppBar throughout — it never "jumps", just smoothly slides from `bannerEnd` (expanded) to `statusBarInset` (collapsed). This is what makes the sticky transition feel native.
+```dart
+NotificationListener<ScrollNotification>(
+  onNotification: (n) {
+    if (n.depth == 0) {  // outer scroll only, ignore inner per-tab scrolls
+      final p = (n.metrics.pixels / bannerH).clamp(0.0, 1.0);
+      if ((p - _pinProgress.value).abs() > 0.005) {
+        _pinProgress.value = p;
+      }
+    }
+    return false;
+  },
+  child: NestedScrollView(...),
+)
+```
+
+### Why this structure works
+
+`SliverAppBar` natively interpolates its height from `expandedHeight` down to `bottom.height` (the collapsed minimum) as the user scrolls. The strip in `bottom` rides at the AppBar's bottom edge throughout — it never "jumps", just smoothly slides upward as the AppBar collapses.
+
+The `_pinProgress` interpolation (driven by `NotificationListener` + `ValueListenableBuilder`) handles the pill's top padding INSIDE the slot: 0 when banner is fully visible, `statusBarInset` when banner is fully collapsed. This makes the pill SLIDE smoothly within its slot, not JUMP at a discrete pin moment.
 
 ### Why each part exists
 
@@ -54,12 +82,14 @@ NestedScrollView
 | `NestedScrollView` | Coordinates outer scroll (AppBar collapse) with inner scrolls (per-tab content). |
 | `SliverOverlapAbsorber/Injector` pair | Tells the inner `CustomScrollView` "the outer pinned AppBar reserves N pixels at the top right now"; without this, the inner scroll's first child renders at y=0 in the inner viewport and gets hidden behind the pinned strip. |
 | `SliverAppBar.pinned: true` | Keeps the AppBar (toolbar + bottom) visible at the top after collapse — that IS the sticky behavior. |
-| `SliverAppBar.primary: true` | Auto-applies device-status-bar inset above the toolbar. With `toolbarHeight: 0` the inset still applies — total collapsed height = `statusBarInset + 0 + bottom.height`. |
+| **`SliverAppBar.primary: false`** | Banner extends into status-bar area (immersive). With `primary: true` Flutter auto-pushes the AppBar down by `statusBarInset`, leaving a `pageBg`-colored strip at top y=0..statusBarInset — looks like an unwanted "white space" above banner. We instead handle status-bar inset MANUALLY on the strip. |
 | `toolbarHeight: 0` | We don't want a Material toolbar bar; the strip is the only visible bottom-of-AppBar element. |
-| `expandedHeight = statusBarInset + bannerH + stripH` | **Total** AppBar height = top inset + banner + strip. Without `statusBarInset` here, banner gets cropped (`expandedHeight` includes everything). |
-| `flexibleSpace.background = Padding(top: statusBarInset, child: banner)` | Banner image is rendered inside flexibleSpace, which extends from y=0 to y=(expandedHeight - bottom.height) = (statusBarInset + bannerH). The Padding shifts the banner image down by statusBarInset so its content doesn't render UNDER the status bar icons. (The status bar overlay area shows the banner image's top edge through transparency.) |
+| `expandedHeight = bannerH + stripH + statusBarInset` | **Total** AppBar height. The strip's `bottom` widget reserves `stripH + statusBarInset` (slot for pill + inset). Banner gets `expandedHeight - bottom.height = bannerH`. |
+| `flexibleSpace.background = Image.asset(banner, fit: cover, alignment: topCenter)` (no Padding wrapper) | Banner image renders from y=0, including the status-bar area. Status bar icons overlay the banner's top decorative gradient. The `topCenter` alignment ensures the banner's top stays anchored as the AppBar collapses. |
 | `FlexibleSpaceBar.collapseMode: pin` | Banner stays pinned at its top while the AppBar collapses around it (vs `parallax` which scrolls banner at half-rate). For typical hero banners, `pin` looks correct. |
-| `bottom: PreferredSize(stripH, ...)` | Strip is always at the bottom edge of the AppBar. When AppBar is fully expanded, strip sits right under banner (no gap). When fully collapsed, strip is right under the status bar inset — pinned. |
+| `bottom: PreferredSize(stripH + statusBarInset, ...)` | Strip slot is permanently `pillH + statusBarInset` tall. The pill itself is always `stripH` — the extra `statusBarInset` is dynamically positioned via the interpolated Padding (above pill in pinned, below pill in expanded). |
+| `ValueListenableBuilder<double>` around the slot's content | Rebuilds the Padding's `top` value as `_pinProgress` changes, smoothly sliding the pill within the slot. |
+| `NotificationListener<ScrollNotification>` (depth == 0) | Watches outer-scroll position; computes `p = pixels / bannerH` (0..1) and updates `_pinProgress`. Filtering on `n.depth == 0` is critical — inner per-tab scrolls fire at depth >= 1 and would corrupt the value. |
 | `TabController` shared between strip + body | Strip click → `controller.animateTo(i)`; body swipe → `controller.index` updates; strip listens to controller and re-paints the selected pill. |
 | `PageStorageKey` per tab | Without it, swiping back to a tab resets its scroll to top. PageStorage saves scroll offset per key. |
 | `AutomaticKeepAliveClientMixin` | Prevents Flutter from disposing off-screen tabs. Without it, tabs lose their state on swipe-away. |
@@ -67,67 +97,97 @@ NestedScrollView
 ## Minimal Dart skeleton
 
 ```dart
-class _ScrollShell extends StatelessWidget {
+class _ScrollShell extends StatefulWidget {
   const _ScrollShell({required this.tabController, required this.tabs, required this.bannerAsset});
 
   final TabController tabController;
   final List<TabItem> tabs;
   final String bannerAsset;
 
+  @override
+  State<_ScrollShell> createState() => _ScrollShellState();
+}
+
+class _ScrollShellState extends State<_ScrollShell> {
   static const double _bannerH = 278;
   static const double _stripH = 30;
+
+  /// Smooth pin progress: 0 when banner fully visible, 1 when fully pinned.
+  /// Interpolated linearly with outer scroll position over banner height.
+  /// Drives the pill's top padding so it slides 0 → statusBarInset.
+  final ValueNotifier<double> _pinProgress = ValueNotifier(0.0);
+
+  @override
+  void dispose() {
+    _pinProgress.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final statusBarInset = MediaQuery.of(context).padding.top;
-    final expandedHeight = statusBarInset + _bannerH + _stripH;
-    return NestedScrollView(
-      headerSliverBuilder: (ctx, _) => [
-        SliverOverlapAbsorber(
-          handle: NestedScrollView.sliverOverlapAbsorberHandleFor(ctx),
-          sliver: SliverAppBar(
-            pinned: true,
-            primary: true,
-            toolbarHeight: 0,
-            expandedHeight: expandedHeight,
-            backgroundColor: pageBg,
-            surfaceTintColor: Colors.transparent,
-            elevation: 0,
-            scrolledUnderElevation: 0,
-            automaticallyImplyLeading: false,
-            flexibleSpace: FlexibleSpaceBar(
-              collapseMode: CollapseMode.pin,
-              background: Padding(
-                padding: EdgeInsets.only(top: statusBarInset),
-                child: Image.asset(
-                  bannerAsset,
+    final expandedHeight = _bannerH + _stripH + statusBarInset;
+    return NotificationListener<ScrollNotification>(
+      onNotification: (n) {
+        if (n.depth == 0) {
+          final p = (n.metrics.pixels / _bannerH).clamp(0.0, 1.0);
+          if ((p - _pinProgress.value).abs() > 0.005) {
+            _pinProgress.value = p;
+          }
+        }
+        return false;
+      },
+      child: NestedScrollView(
+        headerSliverBuilder: (ctx, _) => [
+          SliverOverlapAbsorber(
+            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(ctx),
+            sliver: SliverAppBar(
+              pinned: true,
+              primary: false,                                  // immersive banner
+              toolbarHeight: 0,
+              expandedHeight: expandedHeight,
+              backgroundColor: pageBg,
+              surfaceTintColor: Colors.transparent,
+              elevation: 0,
+              scrolledUnderElevation: 0,
+              automaticallyImplyLeading: false,
+              flexibleSpace: FlexibleSpaceBar(
+                collapseMode: CollapseMode.pin,
+                background: Image.asset(                       // NO Padding wrapper
+                  widget.bannerAsset,
                   fit: BoxFit.cover,
                   alignment: Alignment.topCenter,
                 ),
               ),
-            ),
-            bottom: PreferredSize(
-              preferredSize: const Size.fromHeight(_stripH),
-              child: ColoredBox(
-                color: pageBg,
-                child: SizedBox(
-                  height: _stripH,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 15),
-                    child: _Strip(controller: tabController, tabs: tabs),
+              bottom: PreferredSize(
+                preferredSize: Size.fromHeight(_stripH + statusBarInset),
+                child: ValueListenableBuilder<double>(
+                  valueListenable: _pinProgress,
+                  builder: (_, p, _) => ColoredBox(
+                    color: pageBg,
+                    child: Padding(
+                      padding: EdgeInsets.only(
+                        top: statusBarInset * p,                // smoothly 0 → inset
+                        left: 15, right: 15,
+                      ),
+                      child: SizedBox(
+                        height: _stripH,
+                        child: _Strip(controller: widget.tabController, tabs: widget.tabs),
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
-      ],
-      body: TabBarView(
-        controller: tabController,
-        children: [
-          for (final t in tabs)
-            _TabContent(key: PageStorageKey('tab_${t.id}'), tab: t),
         ],
+        body: TabBarView(
+          controller: widget.tabController,
+          children: [
+            for (final t in widget.tabs)
+              _TabContent(key: PageStorageKey('tab_${t.id}'), tab: t),
+          ],
+        ),
       ),
     );
   }
@@ -163,13 +223,14 @@ class _TabContentState extends State<_TabContent> with AutomaticKeepAliveClientM
 - ✗ `CustomScrollView` with `SliverAppBar` but body is `Column(TabBar + TabBarView)` → TabBarView needs bounded height, breaks with sliver scroll
 - ✗ Putting the tab strip in a normal `SliverToBoxAdapter` (not pinned in any way) → strip scrolls away with banner, no 吸顶
 - ✗ `SliverAppBar(pinned: true)` without `SliverOverlapAbsorber` + matching `SliverOverlapInjector` in the body → scroll position desyncs, content jumps behind the pinned strip
-- ✗ `SliverAppBar` without `primary: true` → status-bar inset not applied; pinned strip gets covered by status-bar icons
-- ✗ `expandedHeight = bannerH` (forgetting status bar + strip in the formula) → banner cropped because `expandedHeight` is the AppBar's TOTAL height (banner is `expandedHeight − bottom.height − statusBarInset`)
-- ✗ `expandedHeight = bannerH + stripH` (forgetting status bar inset) → banner cropped from the bottom by `statusBarInset` (≈28dp on Android)
-- ✗ `flexibleSpace.background: Image.asset(banner)` WITHOUT `Padding(top: statusBarInset)` → banner content (text, key visuals near top) gets rendered under the device status bar icons; iOS Figma designs reserve a 44px status-bar zone but on Android (~28px) the offset is wrong
+- ✗ `SliverAppBar` with `primary: true` AND a banner that is supposed to be immersive → `primary: true` auto-pushes the AppBar down by `statusBarInset`, leaving a `pageBg`-colored strip at viewport y=0..statusBarInset above the banner. Looks like an unwanted whitespace at the top. **Use `primary: false`** and handle status-bar inset manually on the strip's content (interpolated padding).
+- ✗ Wrapping `flexibleSpace.background` in `Padding(top: statusBarInset)` → with `primary: false`, the AppBar already starts at y=0 and the banner image gets rendered from y=0 immersively. Adding the Padding pushes the banner DOWN by inset, leaving a `pageBg`-colored strip ABOVE the banner image (the same whitespace bug as `primary: true`). **Just `Image.asset(...)` directly inside `background:` — no Padding wrapper.**
+- ✗ `expandedHeight = bannerH` (forgetting status bar + strip in the formula) → banner cropped because `expandedHeight` is the AppBar's TOTAL height. Use `bannerH + stripH + statusBarInset`.
+- ✗ Static `Padding(top: statusBarInset)` on the strip's pill (always-on inset) → 28px gap between banner.bottom and pill in expanded state — strip looks like it's floating above where it should be pinned to. **Use `ValueListenableBuilder<double>` driven by `NotificationListener` to interpolate the padding from 0 → statusBarInset as scroll progresses 0 → bannerHeight.**
 - ✗ Each tab content as a plain `GridView` (no `CustomScrollView` wrapping) → `SliverOverlapInjector` can't be added, scroll syncing breaks
-- ✗ Forgetting `BoxFit.cover, alignment: Alignment.topCenter` on the banner image → as AppBar collapses, the banner shrinks; without `topCenter` alignment, the bottom of the banner stays visible while the top scrolls off — opposite of the natural intuition.
-- ✗ Loading `banner.webp` / card image at @1x source resolution (e.g. `cwebp -resize 375 278`) → on @2x or @3x DPR devices the image is upscaled and looks blurry. **Always store WebP at @2x or @3x source resolution; let Flutter scale down for display.** Source res check: `python3 -c "from PIL import Image; print(Image.open('asset.webp').size)"` should be ≥ 2× the design size.
+- ✗ Forgetting `alignment: Alignment.topCenter` on the banner image → as AppBar collapses, the banner shrinks; without `topCenter` alignment, the bottom of the banner stays visible while the top scrolls off — opposite of the natural intuition.
+- ✗ **Lossy WebP for hero banners or photographic cards** (`cwebp -q 90` etc.) → even at quality 90, WebP introduces visible artifacts on gradient-rich content (banners with soft pink fades) and human faces (slight smoothing/blurring). **Default to PNG for hero / photographic assets**; reserve WebP for icons or non-hero images where compression artifacts won't show.
+- ✗ Storing PNG/WebP at @1x source resolution (e.g. `cwebp -resize 375 278` from a 750px source) → on @2x or @3x DPR devices the image is upscaled and looks blurry. **Always store image assets at @2x or @3x source resolution; let Flutter scale down for display.** Source-res check: `python3 -c "from PIL import Image; print(Image.open('asset.png').size)"` should be ≥ 2× the design size.
 
 ## Why NOT a two-sliver header (`SliverToBoxAdapter` + `SliverPersistentHeader`)?
 
