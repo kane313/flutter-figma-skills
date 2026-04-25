@@ -1,5 +1,7 @@
 # flutter-figma-skills
 
+> 🌐 **English** · [中文](README.zh-CN.md)
+
 Claude Code marketplace for **Flutter UI reproduction from Figma** — a 5-phase orchestrated pipeline that takes a Figma node URL and produces a high-fidelity Flutter page in your project, with per-phase scorecard verification on a real Android / iOS device.
 
 ## What's in this marketplace
