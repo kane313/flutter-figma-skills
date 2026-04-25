@@ -13,6 +13,80 @@ Trigger on Figma when ALL of:
 
 Without (4) — when the user only says "static layout" — use the simpler `Stack + Positioned` layout.
 
+## The status-bar-inset dilemma (single most common pinned-header pitfall)
+
+When the pinned strip is at the top of the screen, it MUST avoid being covered by the device status bar — meaning it needs `MediaQuery.padding.top` of empty space ABOVE the visible pill. But when the banner is still visible above the strip, that same inset becomes a visible gap between banner.bottom and strip.pill — looking like the strip is "floating", not "stuck under banner".
+
+The dilemma:
+- **Always-on inset** (the naive first attempt): visible gap between banner and strip in expanded state. User complains "spacing too large".
+- **No inset**: device status bar overlays the strip's pills in pinned state. Pills unreadable.
+- **Static `SliverPersistentHeader` with min == max**: cannot grow when pinned (extents are immutable per build).
+
+The correct fix is a **two-step alignment toggle**:
+
+1. The strip's slot is permanently `pillH + statusBarInset` tall — enough room for pill + inset.
+2. When NOT pinned: pill aligned to TOP of slot → 0 gap above pill, the inset's space is BELOW pill (visually inside the page bg between strip and grid — much less salient than a gap above).
+3. When pinned: pill aligned to BOTTOM of slot → inset's space is ABOVE pill, hidden under the device status bar. Pill fully visible below status bar.
+
+To trigger the alignment toggle, you need to KNOW when the strip is pinned. **Do NOT use `SliverPersistentHeaderDelegate.overlapsContent` for this** — inside `NestedScrollView` it stays `false` even when the strip is clearly pinned (the inner scroll's content "scrolls under" the strip via `SliverOverlapAbsorber/Injector` rather than via the strip's overlapsContent). Use this instead:
+
+```dart
+class _ScrollShellState extends State<_ScrollShell> {
+  final _stripIsPinned = ValueNotifier<bool>(false);
+
+  @override
+  Widget build(BuildContext ctx) {
+    return NotificationListener<ScrollNotification>(
+      onNotification: (n) {
+        if (n.depth == 0) {  // outer scroll, NOT inner per-tab scroll
+          final pinned = n.metrics.pixels >= bannerH - 0.5;
+          if (pinned != _stripIsPinned.value) _stripIsPinned.value = pinned;
+        }
+        return false;
+      },
+      child: NestedScrollView(
+        headerSliverBuilder: (ctx, _) => [
+          SliverToBoxAdapter(child: SizedBox(height: bannerH, child: bannerImage)),
+          SliverOverlapAbsorber(
+            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(ctx),
+            sliver: ValueListenableBuilder<bool>(
+              valueListenable: _stripIsPinned,
+              builder: (_, pinned, _) => SliverPersistentHeader(
+                pinned: true,
+                delegate: _StripDelegate(
+                  ...,
+                  isPinned: pinned,  // ← drives alignment in build()
+                ),
+              ),
+            ),
+          ),
+        ],
+        body: TabBarView(...),
+      ),
+    );
+  }
+}
+```
+
+Inside the delegate's `build`:
+```dart
+@override
+Widget build(BuildContext ctx, double shrinkOffset, bool overlapsContent) {
+  return ColoredBox(
+    color: pageBg,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 15),
+      child: Align(
+        alignment: isPinned ? Alignment.bottomCenter : Alignment.topCenter,
+        child: SizedBox(height: pillH, child: stripWidget),
+      ),
+    ),
+  );
+}
+```
+
+Don't forget to override `shouldRebuild` to compare the `isPinned` flag — otherwise the toggle won't trigger a rebuild.
+
 ## Anti-patterns to AVOID (will compile but break behavior)
 
 - ✗ `Stack` + `Positioned(top: scrollOffset)` manually moving widgets on scroll → janky, no fling physics, hit-test gaps
@@ -22,6 +96,8 @@ Without (4) — when the user only says "static layout" — use the simpler `Sta
 - ✗ `SliverAppBar(pinned: true)` without `SliverOverlapAbsorber` + matching `SliverOverlapInjector` in the body → scroll position desyncs between outer and inner, content jumps
 - ✗ Forgetting `MediaQuery.padding.top` in the pinned tab strip → tabs get covered by the device status bar after collapse
 - ✗ Each tab content as a plain `GridView` (no `CustomScrollView` wrapping) → `SliverOverlapInjector` can't be added, scroll syncing breaks
+- ✗ Adding a static `Padding(top: MediaQuery.padding.top)` ABOVE the pinned strip's pill → 28px visible gap between banner.bottom and pill, strip looks like it's floating not pinned. **Fix**: dynamic alignment via `NotificationListener + ValueNotifier` driving `Alignment.topCenter` (expanded) vs `Alignment.bottomCenter` (pinned). See § "The status-bar-inset dilemma".
+- ✗ Relying on `SliverPersistentHeaderDelegate.overlapsContent` to detect the pinned state → unreliable inside `NestedScrollView`, often returns `false` even when the strip is visibly pinned. Use a `NotificationListener<ScrollNotification>` filtering on `n.depth == 0` to detect outer-scroll position passing the banner height instead.
 - ✗ Using `SliverAppBar(pinned: true, flexibleSpace: banner, bottom: stripPreferredSize)` as the header sliver. Three cascading failures: (a) `expandedHeight=bannerH` silently crops the banner because `expandedHeight` includes `bottom.height + toolbarHeight`; (b) the "fix" `expandedHeight = bannerH + stripH + statusBarInset` correctly preserves banner height BUT pushes the entire layout down ~58px, costing the user one full row of below-fold content (the design intent is for the strip to sit AT or slightly OVERLAP the banner's bottom edge, not strictly below it); (c) `bottom` renders strictly below the banner — you can't reproduce a Figma design where the strip Y overlaps the banner's max-Y by 1-3px. **Use `SliverToBoxAdapter(banner) + SliverPersistentHeader(pinned, delegate=strip)` as separate header slivers instead** — see the "Why this structure" subsection below.
 
 ## Canonical structure
