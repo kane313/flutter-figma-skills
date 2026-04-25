@@ -23,26 +23,31 @@ A. **Banner immersive** — banner extends INTO the status bar area (designer's 
 B. **Zero gap above strip pill in expanded state** — pill flush against banner.bottom
 C. **Strip pill avoids status bar in pinned state** — `MediaQuery.padding.top` of clearance above pill so device icons don't overlap
 
-These three constraints CANNOT all be satisfied with static layout. The trick: keep the strip slot height static (`pillH + statusBarInset`) but **smoothly interpolate the pill's top padding from 0 → statusBarInset as scroll progresses from 0 → bannerHeight**. The "extra 28px" sits BELOW the pill in expanded state (least-salient location, between strip and grid) and ABOVE the pill in pinned state (covered by status bar icons).
+These three constraints CANNOT all be satisfied with static layout. The trick: **interpolate BOTH the strip slot height AND the pill's top padding by `p` (scroll progress 0..1)** so the slot smoothly grows from `pillH` (expanded) to `pillH + statusBarInset` (pinned), the pill's top padding grows from 0 to `statusBarInset`, AND the body content (grid) follows the slot bottom. The "extra 28px" doesn't exist in expanded state at all (slot is just `pillH`), and it's hidden under the device status bar in pinned state. Grid stays glued to pill bottom in both states — no wasted vertical space, no visible gap.
+
+The companion to interpolated slot height: **expandedHeight is also interpolated** — `expandedHeight = bannerHeight + slotHeight` where `slotHeight = pillH + statusBarInset * p`. This means the AppBar's total height grows by `statusBarInset` as the strip pins, which automatically pushes the body (grid) down by that same amount. Looks visually as if "the strip grows out of nowhere" but it's actually "the page header grows by inset to make room for status bar protection of the pill".
 
 ```
-NestedScrollView
-├─ headerSliverBuilder
-│  └─ SliverOverlapAbsorber                                  ← MANDATORY: handle = sliverOverlapAbsorberHandleFor(ctx)
-│     └─ SliverAppBar
-│        ├─ pinned: true                                      ← AppBar (with toolbar 0 + bottom strip) stays pinned at top after collapse
-│        ├─ primary: false                                    ← banner extends into status-bar area (immersive); we'll handle status-bar inset on the strip MANUALLY
-│        ├─ toolbarHeight: 0                                  ← we don't want a Material toolbar — bottom IS our sticky strip
-│        ├─ expandedHeight: bannerH + stripH + statusBarInset    ← TOTAL AppBar height when fully expanded; bottom.height already includes statusBarInset reservation
-│        ├─ flexibleSpace: FlexibleSpaceBar
-│        │   ├─ collapseMode: CollapseMode.pin
-│        │   └─ background: Image.asset(banner, fit: cover, alignment: topCenter)   ← NO Padding wrapper — banner from y=0
-│        └─ bottom: PreferredSize
-│           ├─ preferredSize.height = stripH + statusBarInset                       ← slot reserves room for inset
-│           └─ child: ValueListenableBuilder<double>(_pinProgress, build: (_, p, _) =>
-│                ColoredBox(pageBg) → Padding(top: statusBarInset * p, ...) → strip ← interpolated padding 0..inset
-│              )
-└─ body: TabBarView
+ValueListenableBuilder<double>(_pinProgress, build: (_, p, _) {
+  final extraInset = statusBarInset * p;          ← grows 0 → inset as strip pins
+  final slotHeight = pillH + extraInset;          ← grows pillH → pillH+inset
+  final expandedHeight = bannerHeight + slotHeight;  ← grows bannerH+pillH → bannerH+pillH+inset
+  return NestedScrollView(
+    headerSliverBuilder
+    └─ SliverOverlapAbsorber                                  ← MANDATORY
+       └─ SliverAppBar
+          ├─ pinned: true                                      ← AppBar (with toolbar 0 + bottom strip) stays pinned at top
+          ├─ primary: false                                    ← banner immersive (extends into status-bar area)
+          ├─ toolbarHeight: 0
+          ├─ expandedHeight: <interpolated>                    ← grows during pin transition
+          ├─ flexibleSpace: FlexibleSpaceBar
+          │   ├─ collapseMode: CollapseMode.pin
+          │   └─ background: Image.asset(banner, fit: fitWidth, alignment: topCenter)  ← NOT cover; see Anti-patterns
+          └─ bottom: PreferredSize
+             ├─ preferredSize.height = slotHeight              ← interpolated, NOT static
+             └─ child: ColoredBox(pageBg) → Padding(top: extraInset, ...) → strip
+    body: TabBarView
+})
    └─ controller: <shared TabController>
       for each tab:
         ├─ key: PageStorageKey('cat_<id>')                    ← preserves per-tab scroll position
@@ -137,57 +142,65 @@ class _ScrollShellState extends State<_ScrollShell> {
         }
         return false;
       },
-      child: NestedScrollView(
-        headerSliverBuilder: (ctx, _) => [
-          SliverOverlapAbsorber(
-            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(ctx),
-            sliver: SliverAppBar(
-              pinned: true,
-              primary: false,                                  // immersive banner
-              toolbarHeight: 0,
-              expandedHeight: expandedHeight,
-              backgroundColor: pageBg,
-              surfaceTintColor: Colors.transparent,
-              elevation: 0,
-              scrolledUnderElevation: 0,
-              automaticallyImplyLeading: false,
-              flexibleSpace: FlexibleSpaceBar(
-                collapseMode: CollapseMode.pin,
-                background: Image.asset(                       // NO Padding wrapper
-                  widget.bannerAsset,
-                  fit: BoxFit.cover,
-                  alignment: Alignment.topCenter,
-                ),
-              ),
-              bottom: PreferredSize(
-                preferredSize: Size.fromHeight(_stripH + statusBarInset),
-                child: ValueListenableBuilder<double>(
-                  valueListenable: _pinProgress,
-                  builder: (_, p, _) => ColoredBox(
-                    color: pageBg,
-                    child: Padding(
-                      padding: EdgeInsets.only(
-                        top: statusBarInset * p,                // smoothly 0 → inset
-                        left: 15, right: 15,
-                      ),
-                      child: SizedBox(
-                        height: _stripH,
-                        child: _Strip(controller: widget.tabController, tabs: widget.tabs),
+      child: ValueListenableBuilder<double>(
+        valueListenable: _pinProgress,
+        builder: (_, p, _) {
+          // Interpolate BOTH slotHeight AND expandedHeight by p so the body
+          // (grid) follows the strip down as it grows, instead of leaving a
+          // wasted 28px gap between pill and grid in the expanded state.
+          final extraInset = statusBarInset * p;
+          final slotHeight = _stripH + extraInset;
+          final expandedHeight = bannerHeight + slotHeight;
+          return NestedScrollView(
+            headerSliverBuilder: (ctx, _) => [
+              SliverOverlapAbsorber(
+                handle: NestedScrollView.sliverOverlapAbsorberHandleFor(ctx),
+                sliver: SliverAppBar(
+                  pinned: true,
+                  primary: false,                              // immersive banner
+                  toolbarHeight: 0,
+                  expandedHeight: expandedHeight,
+                  backgroundColor: pageBg,
+                  surfaceTintColor: Colors.transparent,
+                  elevation: 0,
+                  scrolledUnderElevation: 0,
+                  automaticallyImplyLeading: false,
+                  flexibleSpace: FlexibleSpaceBar(
+                    collapseMode: CollapseMode.pin,
+                    background: Image.asset(                  // NOT cover, NOT Padding-wrapped
+                      widget.bannerAsset,
+                      fit: BoxFit.fitWidth,
+                      alignment: Alignment.topCenter,
+                    ),
+                  ),
+                  bottom: PreferredSize(
+                    preferredSize: Size.fromHeight(slotHeight),
+                    child: ColoredBox(
+                      color: pageBg,
+                      child: Padding(
+                        padding: EdgeInsets.only(
+                          top: extraInset,
+                          left: 15, right: 15,
+                        ),
+                        child: SizedBox(
+                          height: _stripH,
+                          child: _Strip(controller: widget.tabController, tabs: widget.tabs),
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
+            ],
+            body: TabBarView(
+              controller: widget.tabController,
+              children: [
+                for (final t in widget.tabs)
+                  _TabContent(key: PageStorageKey('tab_${t.id}'), tab: t),
+              ],
             ),
-          ),
-        ],
-        body: TabBarView(
-          controller: widget.tabController,
-          children: [
-            for (final t in widget.tabs)
-              _TabContent(key: PageStorageKey('tab_${t.id}'), tab: t),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
@@ -227,6 +240,7 @@ class _TabContentState extends State<_TabContent> with AutomaticKeepAliveClientM
 - ✗ Wrapping `flexibleSpace.background` in `Padding(top: statusBarInset)` → with `primary: false`, the AppBar already starts at y=0 and the banner image gets rendered from y=0 immersively. Adding the Padding pushes the banner DOWN by inset, leaving a `pageBg`-colored strip ABOVE the banner image (the same whitespace bug as `primary: true`). **Just `Image.asset(...)` directly inside `background:` — no Padding wrapper.**
 - ✗ `expandedHeight = bannerH` (forgetting status bar + strip in the formula) → banner cropped because `expandedHeight` is the AppBar's TOTAL height. Use `bannerH + stripH + statusBarInset`.
 - ✗ Static `Padding(top: statusBarInset)` on the strip's pill (always-on inset) → 28px gap between banner.bottom and pill in expanded state — strip looks like it's floating above where it should be pinned to. **Use `ValueListenableBuilder<double>` driven by `NotificationListener` to interpolate the padding from 0 → statusBarInset as scroll progresses 0 → bannerHeight.**
+- ✗ Interpolating only the pill's top padding while keeping the strip slot height STATIC at `pillH + statusBarInset` → pill correctly slides from top to bottom of slot, BUT the slot itself reserves `inset` of unused space below the pill in expanded state. Grid renders 28px lower than the design intends — designer-eyes notice the extra spacing between pill and first row of cards. **Interpolate BOTH `slotHeight` AND `expandedHeight` together** (`slotHeight = pillH + statusBarInset * p`, `expandedHeight = bannerH + slotHeight`) so the grid follows the slot down as it grows during the pin transition. No wasted vertical space in either state.
 - ✗ Each tab content as a plain `GridView` (no `CustomScrollView` wrapping) → `SliverOverlapInjector` can't be added, scroll syncing breaks
 - ✗ Forgetting `alignment: Alignment.topCenter` on the banner image → as AppBar collapses, the banner shrinks; without `topCenter` alignment, the bottom of the banner stays visible while the top scrolls off — opposite of the natural intuition.
 - ✗ Using `BoxFit.cover` on the banner image with a fixed `bannerHeight` constant (e.g. 278) → on devices wider than the design width (e.g. Android at 387dp vs design 375dp), `cover` scales the image up to fill the wider container, growing the height beyond `bannerHeight` and cropping the top + bottom (`(287 − 278)/2 ≈ 4.5px each`). Visually the banner contents look "amplified" 3-5% — characters appear bigger, decorative elements overflow toward the edges, and the bottom alpha-mask region (if any) gets cropped out, killing the soft fade-to-page-bg effect designers usually bake into hero banners. **Use `BoxFit.fitWidth` and compute `bannerHeight = deviceWidth × imageRatio`** so the image renders at exactly its native aspect on every device width, preserving alpha and avoiding crop:
