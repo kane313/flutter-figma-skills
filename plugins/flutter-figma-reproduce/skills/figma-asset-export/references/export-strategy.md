@@ -19,9 +19,11 @@ In the design context returned by `mcp__figma__get_design_context`:
 | Node signal | Asset type | Export format |
 |---|---|---|
 | `fills: [{ type: IMAGE, imageRef: '<hash>' }]` | Raster image | PNG @2x via REST → WebP |
-| `type: INSTANCE`, `componentId` matches a known icon library | Icon | SVG via REST |
-| `type: VECTOR` with exportSettings | Vector illustration | SVG via REST |
+| `type: INSTANCE`, `componentId` matches a known icon library | Icon | **PNG @2x via REST → WebP** (default) |
+| `type: VECTOR` with exportSettings | Vector illustration | **PNG @2x via REST → WebP** (default) |
 | `type: RECTANGLE` with gradient fill only | Not an asset | Skip (render in Flutter via gradient) |
+
+> **PNG is the default for everything.** SVG is opt-in only — export as SVG ONLY when the user explicitly requests vector format for a given asset (e.g. "I need this icon as SVG for runtime tinting"). Do not silently choose SVG for icons or vector illustrations.
 
 Collect the list of node IDs and desired formats in memory — do NOT call `get_screenshot` on each during enumeration.
 
@@ -79,9 +81,26 @@ Name the output file from the Figma node `name` attribute (from `get_design_cont
 - spaces / `-` / `/` → `_`
 - drop non-ASCII-printable chars; if name becomes empty, fall back to `asset_<nodeId>`
 
-## Pulling SVG icons
+## Pulling icons
 
-Same endpoint, `format=svg`:
+**Default to PNG for icons.** Use the same `format=png&scale=2` endpoint as raster images, then run cwebp like any other raster. Drop them into `{icon_root}` instead of `{assets_root}`:
+
+```bash
+curl -sS -H "X-Figma-Token: $FIGMA_TOKEN" \
+  "https://api.figma.com/v1/images/${FILE_KEY}?ids=${ICON_IDS_COMMA}&format=png&scale=2" \
+  > icon_response.json
+
+for node_id in $(jq -r '.images | keys[]' icon_response.json); do
+  url=$(jq -r ".images[\"$node_id\"]" icon_response.json)
+  curl -sS "$url" -o "tmp/icons/${node_id//:/_}.png"
+done
+```
+
+Then cwebp each `.png` → `.webp` and place under `{icon_root}`.
+
+### SVG (opt-in only)
+
+Only run this branch when the user has explicitly requested SVG for a specific asset. Do not default to it.
 
 ```bash
 curl -sS -H "X-Figma-Token: $FIGMA_TOKEN" \
@@ -94,7 +113,7 @@ for node_id in $(jq -r '.images | keys[]' svg_response.json); do
 done
 ```
 
-Post-process optional: strip Figma's `<desc>` and unused id attributes via `sed` or `svgo` for smaller files.
+Post-process optional: strip Figma's `<desc>` and unused id attributes via `sed` or `svgo` for smaller files. SVG outputs skip cwebp.
 
 ## Component-source export (icon size consistency)
 
@@ -112,7 +131,7 @@ The same icon component appearing at multiple sizes in the design (e.g. 24×24 i
 ```json
 {
   "1:234": {
-    "asset_path": "assets/icons/heart.svg",
+    "asset_path": "assets/icons/heart.webp",
     "source_size": [24, 24],
     "instances": [
       {"node_id": "5:678", "render_size": [24, 24]},
@@ -129,11 +148,14 @@ The same icon component appearing at multiple sizes in the design (e.g. 24×24 i
 Display size at each instance is controlled in CODE via `flutter_screenutil` suffixes (Phase 2):
 
 ```dart
-// 24×24 nav icon
-SvgPicture.asset('assets/icons/heart.svg', width: 24.w, height: 24.w)
+// 24×24 nav icon (PNG default — exported at @2x source resolution)
+Image.asset('assets/icons/heart.webp', width: 24.w, height: 24.w)
 
 // 16×16 inline icon — SAME asset, different render size
-SvgPicture.asset('assets/icons/heart.svg', width: 16.w, height: 16.w)
+Image.asset('assets/icons/heart.webp', width: 16.w, height: 16.w)
+
+// SVG (opt-in only) — when the user explicitly requested vector format:
+// SvgPicture.asset('assets/icons/heart.svg', width: 24.w, height: 24.w)
 ```
 
 Phase 2 reads `dedup-map.json` to learn that both instances point to one file.
@@ -142,7 +164,7 @@ Phase 2 reads `dedup-map.json` to learn that both instances point to one file.
 
 For inlined `VECTOR` nodes (no componentId):
 
-1. Compute SHA-1 of the exported SVG bytes (geometry equality)
+1. Compute SHA-1 of the exported asset bytes (PNG by default; SVG only if the user opted in for that node) — geometry/pixel equality
 2. If two inlined vectors have identical SHA → treat as one asset, reuse the same file
 3. If they differ even slightly (anti-aliasing, rounding) → export both with disambiguating filenames (`<base>-1`, `<base>-2`) and emit a warning: "two visually similar but non-identical inlined vectors found — recommend componentizing in Figma so they share a source"
 

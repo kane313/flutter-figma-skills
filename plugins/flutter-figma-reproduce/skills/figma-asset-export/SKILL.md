@@ -10,6 +10,12 @@ description: "Exports image and icon assets from a Figma node into a Flutter pro
 - Invoked by `flutter-figma-reproduce` main skill in Phase 2 (Style) when image fills or icon components need materialization
 - Standalone: "pull all images from this Figma frame into my Flutter project"
 
+## User preference: PNG over SVG (default)
+
+**Default to PNG for ALL Figma asset exports — including icons.** Do not export SVG unless the user explicitly asks for it (e.g. "I want SVG for this icon" / "use vector format"). This applies to raster image fills, icon library components, and `type: VECTOR` nodes alike. Rationale: the user has standardized on PNG to avoid SVG rendering inconsistencies and `flutter_svg` runtime cost. When in doubt, choose PNG.
+
+If you believe SVG is genuinely required for a specific case (e.g. infinite-zoom UI, runtime color tinting that can't be done via `Image.asset` color blend), pause and ask the user before exporting SVG.
+
 ## Inputs
 
 - `figma_node` (required) — Figma nodeId or URL
@@ -36,9 +42,9 @@ Read `references/pubspec-patch.md` for safe pubspec editing.
    - Batch PNG request: `curl -H "X-Figma-Token: $FIGMA_TOKEN" https://api.figma.com/v1/images/{fileKey}?ids=...&format=png&scale=2`
    - Parse response `{images: {nodeId: signedUrl}}` with `jq`
    - `curl` each signed URL to a temp dir
-   - Same pattern for SVG with `format=svg`
-4. **Convert raster to WebP** via `cwebp`. Preserve filename (sans extension), add `.webp`.
-5. **Move into project**: raster → `{assets_root}`, icons (SVG, no WebP conversion) → `{icon_root}`. Preserve Figma node names (sanitize to snake_case).
+   - **Use `format=png` for icons too by default** — only switch to `format=svg` when the user explicitly opts into SVG for that asset.
+4. **Convert raster to WebP** via `cwebp`. Preserve filename (sans extension), add `.webp`. Apply this to icons exported as PNG as well.
+5. **Move into project**: raster → `{assets_root}`, icons → `{icon_root}` (as `.webp` since they are now PNG-sourced). Preserve Figma node names (sanitize to snake_case). If the user explicitly opted into SVG for a given asset, keep it as `.svg` under `{icon_root}` and skip cwebp for that file.
 6. **Patch pubspec.yaml**: add new paths to `flutter.assets:` section, preserving existing entries and YAML formatting.
 7. **Emit summary**: list exported paths + any skipped files + pubspec diff.
 
@@ -54,5 +60,5 @@ Read `references/pubspec-patch.md` for safe pubspec editing.
 - **NEVER call `mcp__figma__get_screenshot` to download asset bytes** — it surfaces the image as an Anthropic image content block and fails for SVG / oversized / exotic formats with "Could not process image" (400). Only Bash+curl via REST API is allowed for bytes.
 - **One asset per Figma component** — use `componentId` (or `imageRef` for raster) as the dedup primary key; export ONCE at the component's source size, never at instance render size. See `references/export-strategy.md` § "Component-source export". This prevents the "same icon, different files, slightly different bitmaps" inconsistency.
 - **Never overwrite** an existing asset without explicit user confirmation — compare content hash first; if different, write to `<name>-v2.webp` and flag for review.
-- **SVG icons are not converted to WebP** — keep as SVG (use `flutter_svg` package for rendering).
+- **PNG is the default for icons** — do not export SVG unless the user explicitly opts in. Icons exported as PNG go through `cwebp` like any other raster. Only when the user explicitly requests SVG: keep as `.svg` (no WebP conversion) and use `flutter_svg` for rendering.
 - **pubspec.yaml must remain valid YAML** — use `references/pubspec-patch.md` strategy; never blind-write.
